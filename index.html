@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Song Finder → Apple Music</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #1c1c1e;
+      color: #f2f2f7;
+      min-height: 100vh;
+      padding: 32px 16px;
+    }
+
+    .container { max-width: 680px; margin: 0 auto; }
+
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    p.subtitle { color: #8e8e93; font-size: 14px; margin-bottom: 24px; }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+
+    input[type="url"] {
+      flex: 1;
+      background: #2c2c2e;
+      border: 1px solid #3a3a3c;
+      border-radius: 10px;
+      color: #f2f2f7;
+      font-size: 15px;
+      padding: 10px 14px;
+      outline: none;
+    }
+    input[type="url"]:focus { border-color: #0a84ff; }
+
+    button {
+      background: #0a84ff;
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 600;
+      padding: 10px 20px;
+      white-space: nowrap;
+    }
+    button:disabled { background: #3a3a3c; color: #8e8e93; cursor: default; }
+
+    #status {
+      font-size: 13px;
+      color: #8e8e93;
+      margin-bottom: 16px;
+      min-height: 18px;
+    }
+    #status.error { color: #ff453a; }
+
+    /* Song list */
+    #songList { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+
+    .song-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #2c2c2e;
+      border-radius: 10px;
+      padding: 10px 14px;
+    }
+    .song-row.found { border-left: 3px solid #30d158; }
+    .song-row.not-found { border-left: 3px solid #ff453a; opacity: 0.6; }
+    .song-row.searching { border-left: 3px solid #0a84ff; }
+
+    .song-info { flex: 1; min-width: 0; }
+    .song-title { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .song-url { font-size: 11px; color: #8e8e93; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+
+    .song-check {
+      width: 18px; height: 18px;
+      accent-color: #0a84ff;
+      flex-shrink: 0;
+    }
+
+    /* Output */
+    #outputSection { display: none; }
+
+    #outputSection h2 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+
+    textarea {
+      width: 100%;
+      background: #2c2c2e;
+      border: 1px solid #3a3a3c;
+      border-radius: 10px;
+      color: #f2f2f7;
+      font-family: "SF Mono", "Menlo", monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      padding: 12px 14px;
+      resize: vertical;
+      min-height: 140px;
+      outline: none;
+    }
+
+    .copy-btn {
+      margin-top: 10px;
+      background: #2c2c2e;
+      border: 1px solid #3a3a3c;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 8px 18px;
+    }
+    .copy-btn:hover { background: #3a3a3c; }
+    .copy-btn:active { background: #48484a; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>Song Finder → Apple Music</h1>
+  <p class="subtitle">Paste a URL to an article listing songs. Each song will be looked up on Apple Music.</p>
+
+  <div class="input-row">
+    <input type="url" id="urlInput" placeholder="https://..." />
+    <button id="scanBtn" onclick="scan()">Scan</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="songList"></div>
+
+  <div id="outputSection">
+    <h2>Apple Music URLs <span id="foundCount" style="color:#8e8e93;font-weight:400;"></span></h2>
+    <textarea id="output" readonly></textarea>
+    <button class="copy-btn" onclick="copyOutput()">Copy all</button>
+  </div>
+</div>
+
+<script>
+const PROXY = 'https://api.allorigins.win/get?url=';
+
+async function scan() {
+  const url = document.getElementById('urlInput').value.trim();
+  if (!url) return;
+
+  setStatus('Fetching page…');
+  setBtn(true);
+  document.getElementById('songList').innerHTML = '';
+  document.getElementById('outputSection').style.display = 'none';
+
+  let html;
+  try {
+    const res = await fetch(PROXY + encodeURIComponent(url));
+    const json = await res.json();
+    html = json.contents;
+  } catch (e) {
+    setStatus('Failed to fetch the page. Check the URL and try again.', true);
+    setBtn(false);
+    return;
+  }
+
+  const songs = extractSongs(html);
+  if (songs.length === 0) {
+    setStatus('No song candidates found on the page.', true);
+    setBtn(false);
+    return;
+  }
+
+  setStatus(`Found ${songs.length} candidates — searching Apple Music…`);
+
+  // Render rows
+  const listEl = document.getElementById('songList');
+  const rows = songs.map((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'song-row searching';
+    row.id = `row-${i}`;
+    row.innerHTML = `
+      <input type="checkbox" class="song-check" id="chk-${i}" checked>
+      <div class="song-info">
+        <div class="song-title">${escHtml(s.query)}</div>
+        <div class="song-url" id="url-${i}">Searching…</div>
+      </div>`;
+    listEl.appendChild(row);
+    return row;
+  });
+
+  // Search iTunes for each song
+  const results = await Promise.all(songs.map((s, i) => searchItunes(s.query, i)));
+
+  // Build output
+  let found = 0;
+  results.forEach((r, i) => {
+    const row = document.getElementById(`row-${i}`);
+    const urlEl = document.getElementById(`url-${i}`);
+    if (r) {
+      row.className = 'song-row found';
+      urlEl.textContent = r;
+      found++;
+    } else {
+      row.className = 'song-row not-found';
+      urlEl.textContent = 'Not found';
+      document.getElementById(`chk-${i}`).checked = false;
+    }
+  });
+
+  updateOutput(results);
+  document.getElementById('foundCount').textContent = `· ${found} of ${songs.length} found`;
+  document.getElementById('outputSection').style.display = 'block';
+  setStatus('');
+  setBtn(false);
+
+  // Re-build output when checkboxes change
+  document.getElementById('songList').addEventListener('change', () => updateOutput(results));
+}
+
+function updateOutput(results) {
+  const lines = results.map((r, i) => {
+    const chk = document.getElementById(`chk-${i}`);
+    return chk && chk.checked && r ? r : null;
+  }).filter(Boolean);
+  document.getElementById('output').value = lines.join('\n');
+}
+
+async function searchItunes(query, idx) {
+  try {
+    const res = await fetch(
+      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1&media=music`
+    );
+    const json = await res.json();
+    if (json.results && json.results.length > 0) {
+      return json.results[0].trackViewUrl || null;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function extractSongs(html) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+
+  // Remove nav, footer, aside, script, style
+  ['nav','footer','aside','script','style','header'].forEach(tag => {
+    doc.querySelectorAll(tag).forEach(el => el.remove());
+  });
+
+  const seen = new Set();
+  const results = [];
+
+  // Try headings first (most article-style song lists use h2/h3)
+  const headings = doc.querySelectorAll('h2, h3, h4');
+  headings.forEach(el => {
+    const raw = el.textContent.trim();
+    const query = cleanSongText(raw);
+    if (query && query.length >= 3 && query.length <= 120 && !seen.has(query.toLowerCase())) {
+      seen.add(query.toLowerCase());
+      results.push({ query });
+    }
+  });
+
+  // If headings gave nothing useful, try list items
+  if (results.length < 3) {
+    doc.querySelectorAll('li').forEach(el => {
+      const raw = el.textContent.trim();
+      const query = cleanSongText(raw);
+      if (query && query.length >= 3 && query.length <= 120 && !seen.has(query.toLowerCase())) {
+        seen.add(query.toLowerCase());
+        results.push({ query });
+      }
+    });
+  }
+
+  return results;
+}
+
+function cleanSongText(text) {
+  // Remove leading number + dot/paren: "1.", "12.", "1)"
+  let s = text.replace(/^\d+[\.\):\-]\s*/, '').trim();
+  // Remove surrounding quotes " " ' '
+  s = s.replace(/^["""'']+|["""'']+$/g, '').trim();
+  // Truncate at newline
+  s = s.split('\n')[0].trim();
+  // Skip if looks like a navigation item or too generic
+  if (/^(home|menu|about|contact|share|tweet|facebook|pinterest|next|prev)/i.test(s)) return '';
+  return s;
+}
+
+function copyOutput() {
+  const ta = document.getElementById('output');
+  ta.select();
+  navigator.clipboard.writeText(ta.value).catch(() => document.execCommand('copy'));
+}
+
+function setStatus(msg, isError = false) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = isError ? 'error' : '';
+}
+
+function setBtn(disabled) {
+  document.getElementById('scanBtn').disabled = disabled;
+  document.getElementById('scanBtn').textContent = disabled ? 'Scanning…' : 'Scan';
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Allow pressing Enter in the URL field
+document.getElementById('urlInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') scan();
+});
+</script>
+</body>
+</html>
