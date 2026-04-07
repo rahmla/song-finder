@@ -126,6 +126,11 @@
     <button id="scanBtn" onclick="scan()">Scan</button>
   </div>
 
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:24px;">
+    <input type="password" id="groqKey" placeholder="Groq API key (optional but recommended)" style="flex:1;background:#2c2c2e;border:1px solid #3a3a3c;border-radius:10px;color:#f2f2f7;font-size:14px;padding:8px 14px;outline:none;" />
+    <a href="https://console.groq.com/keys" target="_blank" style="color:#0a84ff;font-size:13px;white-space:nowrap;text-decoration:none;">Get free key →</a>
+  </div>
+
   <div id="status"></div>
 
   <div id="rawSection" style="display:none;margin-bottom:20px;">
@@ -194,15 +199,28 @@ async function scan() {
     return;
   }
 
-  const songs = extractSongs(html);
-  if (songs.length === 0) {
+  const groqKey = document.getElementById('groqKey').value.trim();
+  let queries;
+  if (groqKey) {
+    setStatus('Extracting songs with AI…');
+    try {
+      queries = await extractWithGroq(html, groqKey);
+    } catch (e) {
+      setStatus(`Groq error: ${e.message} — falling back to basic extraction.`, true);
+      queries = extractSongs(html).map(s => s.query);
+    }
+  } else {
+    queries = extractSongs(html).map(s => s.query);
+  }
+
+  if (queries.length === 0) {
     setStatus('No song candidates found on the page.', true);
     setBtn(false);
     return;
   }
 
   // Show raw extracted list for review/editing before iTunes search
-  document.getElementById('rawOutput').value = songs.map(s => s.query).join('\n');
+  document.getElementById('rawOutput').value = queries.join('\n');
   document.getElementById('rawSection').style.display = 'block';
   document.getElementById('songList').innerHTML = '';
   document.getElementById('outputSection').style.display = 'none';
@@ -280,6 +298,49 @@ async function searchItunes(query) {
     }
   } catch (_) {}
   return null;
+}
+
+async function extractWithGroq(html, apiKey) {
+  // Strip HTML to plain text
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  ['script','style','nav','footer','header','aside'].forEach(tag =>
+    doc.querySelectorAll(tag).forEach(el => el.remove())
+  );
+  const text = doc.body.innerText || doc.body.textContent || '';
+  // Truncate to avoid token limits (~6000 chars is plenty for a song list article)
+  const truncated = text.slice(0, 6000);
+
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.1-8b-instant',
+      temperature: 0,
+      messages: [
+        {
+          role: 'system',
+          content: 'You extract song titles and artist names from text. Output ONLY a plain list, one song per line, in the format: Song Title by Artist Name. No numbering, no bullet points, no extra text.',
+        },
+        {
+          role: 'user',
+          content: `Extract all songs mentioned in this text:\n\n${truncated}`,
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || res.statusText);
+  }
+
+  const json = await res.json();
+  const content = json.choices?.[0]?.message?.content || '';
+  return content.split('\n').map(l => l.trim()).filter(Boolean);
 }
 
 function extractSongs(html) {
@@ -367,6 +428,11 @@ function setBtn(disabled) {
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// Persist Groq key in localStorage
+const groqInput = document.getElementById('groqKey');
+groqInput.value = localStorage.getItem('groqKey') || '';
+groqInput.addEventListener('change', () => localStorage.setItem('groqKey', groqInput.value.trim()));
 
 // Allow pressing Enter in the URL field
 document.getElementById('urlInput').addEventListener('keydown', e => {
