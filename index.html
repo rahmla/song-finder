@@ -137,7 +137,34 @@
 </div>
 
 <script>
-const PROXY = 'https://api.allorigins.win/get?url=';
+const PROXIES = [
+  async (url) => {
+    const res = await fetch('https://corsproxy.io/?' + encodeURIComponent(url));
+    if (!res.ok) throw new Error('corsproxy failed');
+    return res.text();
+  },
+  async (url) => {
+    const res = await fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(url));
+    if (!res.ok) throw new Error('allorigins failed');
+    const json = await res.json();
+    return json.contents;
+  },
+  async (url) => {
+    const res = await fetch('https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url));
+    if (!res.ok) throw new Error('codetabs failed');
+    return res.text();
+  },
+];
+
+async function fetchPage(url) {
+  for (const proxy of PROXIES) {
+    try {
+      const html = await proxy(url);
+      if (html && html.length > 100) return html;
+    } catch (_) {}
+  }
+  throw new Error('All proxies failed');
+}
 
 async function scan() {
   const url = document.getElementById('urlInput').value.trim();
@@ -150,9 +177,7 @@ async function scan() {
 
   let html;
   try {
-    const res = await fetch(PROXY + encodeURIComponent(url));
-    const json = await res.json();
-    html = json.contents;
+    html = await fetchPage(url);
   } catch (e) {
     setStatus('Failed to fetch the page. Check the URL and try again.', true);
     setBtn(false);
