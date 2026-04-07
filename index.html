@@ -127,6 +127,16 @@
   </div>
 
   <div id="status"></div>
+
+  <div id="rawSection" style="display:none;margin-bottom:20px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <h2 style="font-size:15px;font-weight:600;">Extracted from page</h2>
+      <button class="copy-btn" style="margin-top:0;font-size:13px;padding:5px 12px;" onclick="searchAll()">Search Apple Music →</button>
+    </div>
+    <textarea id="rawOutput" style="min-height:180px;"></textarea>
+    <p style="font-size:12px;color:#8e8e93;margin-top:6px;">Edit the list before searching — one song per line.</p>
+  </div>
+
   <div id="songList"></div>
 
   <div id="outputSection">
@@ -191,28 +201,43 @@ async function scan() {
     return;
   }
 
-  setStatus(`Found ${songs.length} candidates — searching Apple Music…`);
+  // Show raw extracted list for review/editing before iTunes search
+  document.getElementById('rawOutput').value = songs.map(s => s.query).join('\n');
+  document.getElementById('rawSection').style.display = 'block';
+  document.getElementById('songList').innerHTML = '';
+  document.getElementById('outputSection').style.display = 'none';
+  setStatus(`Extracted ${songs.length} candidates. Edit the list if needed, then click "Search Apple Music →".`);
+  setBtn(false);
+}
 
-  // Render rows
+async function searchAll() {
+  const lines = document.getElementById('rawOutput').value
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) return;
+
+  setStatus(`Searching Apple Music for ${lines.length} songs…`);
+  document.getElementById('songList').innerHTML = '';
+  document.getElementById('outputSection').style.display = 'none';
+
   const listEl = document.getElementById('songList');
-  const rows = songs.map((s, i) => {
+  lines.forEach((line, i) => {
     const row = document.createElement('div');
     row.className = 'song-row searching';
     row.id = `row-${i}`;
     row.innerHTML = `
       <input type="checkbox" class="song-check" id="chk-${i}" checked>
       <div class="song-info">
-        <div class="song-title">${escHtml(s.query)}</div>
+        <div class="song-title">${escHtml(line)}</div>
         <div class="song-url" id="url-${i}">Searching…</div>
       </div>`;
     listEl.appendChild(row);
-    return row;
   });
 
-  // Search iTunes for each song
-  const results = await Promise.all(songs.map((s, i) => searchItunes(s.query, i)));
+  const results = await Promise.all(lines.map(line => searchItunes(line)));
 
-  // Build output
   let found = 0;
   results.forEach((r, i) => {
     const row = document.getElementById(`row-${i}`);
@@ -229,13 +254,11 @@ async function scan() {
   });
 
   updateOutput(results);
-  document.getElementById('foundCount').textContent = `· ${found} of ${songs.length} found`;
+  document.getElementById('foundCount').textContent = `· ${found} of ${lines.length} found`;
   document.getElementById('outputSection').style.display = 'block';
   setStatus('');
-  setBtn(false);
 
-  // Re-build output when checkboxes change
-  document.getElementById('songList').addEventListener('change', () => updateOutput(results));
+  listEl.addEventListener('change', () => updateOutput(results));
 }
 
 function updateOutput(results) {
@@ -246,7 +269,7 @@ function updateOutput(results) {
   document.getElementById('output').value = lines.join('\n');
 }
 
-async function searchItunes(query, idx) {
+async function searchItunes(query) {
   try {
     const res = await fetch(
       `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1&media=music`
