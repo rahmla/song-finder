@@ -300,13 +300,28 @@ function extractSongs(html) {
 function cleanSongText(text) {
   // Remove leading number + dot/paren: "1.", "12.", "1)"
   let s = text.replace(/^\d+[\.\):\-]\s*/, '').trim();
-  // Remove surrounding quotes " " ' '
-  s = s.replace(/^["""'']+|["""'']+$/g, '').trim();
   // Truncate at newline
   s = s.split('\n')[0].trim();
   // Skip if looks like a navigation item or too generic
   if (/^(home|menu|about|contact|share|tweet|facebook|pinterest|next|prev)/i.test(s)) return '';
-  return s;
+  if (s.length < 3 || s.length > 150) return '';
+
+  // Try to detect "Title by Artist" or "Title – Artist" or "Title - Artist" or "Title | Artist"
+  // Separator patterns: " by ", " – ", " — ", " - ", " | "
+  const sepPattern = /\s+by\s+|\s+[–—]\s+|\s+-\s+|\s+\|\s+/i;
+  const sepMatch = s.match(sepPattern);
+  if (sepMatch) {
+    const idx = s.search(sepPattern);
+    let title = s.slice(0, idx).replace(/^["""'']+|["""'']+$/g, '').trim();
+    let artist = s.slice(idx + sepMatch[0].length).replace(/^["""'']+|["""'']+$/g, '').trim();
+    // Remove trailing parentheticals from artist: "Journey (live)" → "Journey"
+    artist = artist.replace(/\s*\(.*?\)\s*$/, '').trim();
+    if (title && artist) return `${title} ${artist}`;
+    if (title) return title;
+  }
+
+  // No separator — just clean quotes and return as-is
+  return s.replace(/^["""'']+|["""'']+$/g, '').trim();
 }
 
 function copyOutput() {
