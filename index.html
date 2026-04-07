@@ -152,33 +152,15 @@
 </div>
 
 <script>
-const PROXIES = [
-  async (url) => {
-    const res = await fetch('https://corsproxy.io/?' + encodeURIComponent(url));
-    if (!res.ok) throw new Error('corsproxy failed');
-    return res.text();
-  },
-  async (url) => {
-    const res = await fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(url));
-    if (!res.ok) throw new Error('allorigins failed');
-    const json = await res.json();
-    return json.contents;
-  },
-  async (url) => {
-    const res = await fetch('https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url));
-    if (!res.ok) throw new Error('codetabs failed');
-    return res.text();
-  },
-];
-
+// Jina AI Reader renders JS and returns clean markdown — no API key needed
 async function fetchPage(url) {
-  for (const proxy of PROXIES) {
-    try {
-      const html = await proxy(url);
-      if (html && html.length > 100) return html;
-    } catch (_) {}
-  }
-  throw new Error('All proxies failed');
+  const res = await fetch('https://r.jina.ai/' + url, {
+    headers: { 'Accept': 'text/plain' }
+  });
+  if (!res.ok) throw new Error('Failed to fetch page');
+  const text = await res.text();
+  if (!text || text.length < 50) throw new Error('Empty response');
+  return text;
 }
 
 async function scan() {
@@ -212,6 +194,7 @@ async function scan() {
   } else {
     queries = extractSongs(html).map(s => s.query);
   }
+  setStatus(`Fetching page…`);
 
   if (queries.length === 0) {
     setStatus('No song candidates found on the page.', true);
@@ -300,16 +283,9 @@ async function searchItunes(query) {
   return null;
 }
 
-async function extractWithGroq(html, apiKey) {
-  // Strip HTML to plain text
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, 'text/html');
-  ['script','style','nav','footer','header','aside'].forEach(tag =>
-    doc.querySelectorAll(tag).forEach(el => el.remove())
-  );
-  const text = doc.body.innerText || doc.body.textContent || '';
-  // Truncate to avoid token limits (~6000 chars is plenty for a song list article)
-  const truncated = text.slice(0, 6000);
+async function extractWithGroq(pageText, apiKey) {
+  // Jina already returns clean plain text/markdown — truncate to avoid token limits
+  const truncated = pageText.slice(0, 8000);
 
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -343,39 +319,17 @@ async function extractWithGroq(html, apiKey) {
   return content.split('\n').map(l => l.trim()).filter(Boolean);
 }
 
-function extractSongs(html) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, 'text/html');
-
-  // Remove nav, footer, aside, script, style
-  ['nav','footer','aside','script','style','header'].forEach(tag => {
-    doc.querySelectorAll(tag).forEach(el => el.remove());
-  });
-
+function extractSongs(pageText) {
   const seen = new Set();
   const results = [];
 
-  // Try headings first (most article-style song lists use h2/h3)
-  const headings = doc.querySelectorAll('h2, h3, h4');
-  headings.forEach(el => {
-    const raw = el.textContent.trim();
-    const query = cleanSongText(raw);
-    if (query && query.length >= 3 && query.length <= 120 && !seen.has(query.toLowerCase())) {
+  const lines = pageText.split('\n');
+  for (const line of lines) {
+    const query = cleanSongText(line);
+    if (query && !seen.has(query.toLowerCase())) {
       seen.add(query.toLowerCase());
       results.push({ query });
     }
-  });
-
-  // If headings gave nothing useful, try list items
-  if (results.length < 3) {
-    doc.querySelectorAll('li').forEach(el => {
-      const raw = el.textContent.trim();
-      const query = cleanSongText(raw);
-      if (query && query.length >= 3 && query.length <= 120 && !seen.has(query.toLowerCase())) {
-        seen.add(query.toLowerCase());
-        results.push({ query });
-      }
-    });
   }
 
   return results;
